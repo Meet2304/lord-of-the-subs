@@ -1,0 +1,23 @@
+{
+  "name": "lord-of-the-subs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "sync": "node sync/index.mjs",
+    "sync:once": "node sync/index.mjs --once",
+    "install:cursor-hook": "node sync/install-cursor-hook.mjs",
+    "test": "node --test sync/parse.test.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.81.1"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^6.2.1",
+    "svelte": "^5.39.6",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.7"
+  }
+}
