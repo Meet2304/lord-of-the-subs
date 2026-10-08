@@ -3,13 +3,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview",
+    "dev": "node ./node_modules/vite/bin/vite.js",
+    "build": "node ./node_modules/vite/bin/vite.js build",
+    "preview": "node ./node_modules/vite/bin/vite.js preview",
     "sync": "node sync/index.mjs",
     "sync:once": "node sync/index.mjs --once",
     "install:cursor-hook": "node sync/install-cursor-hook.mjs",
-    "test": "node --test sync/parse.test.mjs"
+    "test": "node --test sync/*.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.81.1"

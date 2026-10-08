@@ -5,6 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 import { parseClaudeJsonl } from "./parse-claude.mjs";
 import { parseCodexJsonl } from "./parse-codex.mjs";
 import { parseCursorSpool } from "./parse-cursor.mjs";
+import { loadEnvFile } from "./env.mjs";
 
 function dataDir() {
   if (process.platform === "win32") {
@@ -13,25 +14,6 @@ function dataDir() {
   }
   const base = process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share");
   return path.join(base, "lord-of-the-subs");
-}
-
-function loadEnvFile(file) {
-  if (!fs.existsSync(file)) return;
-  for (const line of fs.readFileSync(file, "utf8").split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const eq = trimmed.indexOf("=");
-    if (eq < 0) continue;
-    const key = trimmed.slice(0, eq).trim();
-    let value = trimmed.slice(eq + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    if (process.env[key] == null || process.env[key] === "") process.env[key] = value;
-  }
 }
 
 async function walkJsonl(dir, found) {
@@ -82,8 +64,10 @@ async function changedFiles(files, state) {
   return changed;
 }
 
-loadEnvFile(path.resolve(".env"));
-loadEnvFile(path.resolve("sync/.env"));
+const envPath = path.resolve("sync/.env");
+const envTxtPath = path.resolve("sync/.env.txt");
+loadEnvFile(path.resolve(".env"), process.env);
+const foundEnv = loadEnvFile(envPath, process.env) || loadEnvFile(envTxtPath, process.env);
 
 const url = process.env.SUPABASE_URL;
 const key = process.env.SUPABASE_PUBLISHABLE_KEY;
@@ -91,8 +75,17 @@ const email = process.env.SUPABASE_EMAIL;
 const password = process.env.SUPABASE_PASSWORD;
 
 if (!url || !key || !email || !password) {
-  console.error("Missing SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, SUPABASE_EMAIL, or SUPABASE_PASSWORD.");
-  console.error("Copy sync/.env.example to sync/.env and fill in the account you created on the site.");
+  const missing = ["SUPABASE_URL", "SUPABASE_PUBLISHABLE_KEY", "SUPABASE_EMAIL", "SUPABASE_PASSWORD"]
+    .filter((name) => !process.env[name]);
+  console.error(`Missing ${missing.join(", ")}.`);
+  if (!foundEnv) {
+    console.error(`No sync/.env file at ${envPath}`);
+    if (fs.existsSync(envTxtPath)) {
+      console.error("Found sync/.env.txt. Notepad added .txt. Rename that file to sync\\.env.");
+    }
+  } else if (missing.includes("SUPABASE_EMAIL") || missing.includes("SUPABASE_PASSWORD")) {
+    console.error("The URL and key can stay as they are. Fill SUPABASE_EMAIL and SUPABASE_PASSWORD with the account you used on the site, then save the file.");
+  }
   process.exit(1);
 }
 
