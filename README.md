@@ -24,6 +24,12 @@ npm run dev
 
 `npm install` has to finish before `npm run dev`. On Windows, a folder name with a space (such as `Projects_Ad Astra`) keeps npm from finding the `vite` command. The scripts call `node ./node_modules/vite/bin/vite.js` directly so that path still works. If this copy of the repo still has the old `"dev": "vite"` script, run `node .\node_modules\vite\bin\vite.js` after `npm install`.
 
+The dashboard reads one database function, `usage_buckets`, added in `supabase/migrations/20261008060000_usage_buckets.sql`. If the page says that function is missing, paste that file into the Supabase SQL editor once and reload:
+
+https://supabase.com/dashboard/project/lskthkcuiabrrmaxvccy/sql/new
+
+To look at the page with made-up numbers first, open the dev server URL with `?demo` (or `?demo=empty`). Demo mode exists only under `npm run dev`; a production build cannot show it.
+
 Open the printed local URL. Create an account. Use a password you can keep in `sync/.env`.
 
 If signup asks you to confirm an email and nothing arrives, open the project’s Auth settings and turn off **Confirm email**, then create the account again:
@@ -64,6 +70,15 @@ Restart Cursor. After each agent turn, the hook appends token counts on your mac
 | Codex | Token counts after each turn, from `~/.codex/sessions` |
 | Cursor agent, after the hook | That turn’s tokens, from a local spool |
 | ChatGPT or Claude in the browser | Nothing. Those sites do not write these files |
+
+The page opens straight on the dashboard (or on sign-in, if you are signed out). It loads 90 days of hourly totals once and keeps a copy in the browser, so it paints immediately on the next visit and switching range or provider does not wait on the network. It shows:
+
+- Cost: what the tokens would cost at API list prices, what you paid, and the ratio between them.
+- Tokens: new input, output, cache writes, and cache reads, with each one's share of tokens and of cost, cache hit rate, and money saved by caching.
+- Models: API value, responses, tokens, cache hit, output per response, list input and output price, the 3:1 blended price Artificial Analysis uses, and your effective price per 1M tokens.
+- Time: daily or hourly charts, a weekday by hour heatmap, active days and hours, streaks, and the busiest slot.
+
+Speed, latency, and benchmark scores are not shown. The ledger stores one timestamp per response, not when each reply started and finished.
 
 The dollar figure is the public API list price for models in `shared/prices.mjs`. A model with no rate still shows its tokens, and those tokens are left out of the money total. Subscription amounts are whatever you type into the page. A free stretch is `$0` with an end date.
 
