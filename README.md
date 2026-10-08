@@ -67,6 +67,8 @@ Restart Cursor. After each agent turn, the hook appends token counts on your mac
 
 The dollar figure is the public API list price for models in `shared/prices.mjs`. A model with no rate still shows its tokens, and those tokens are left out of the money total. Subscription amounts are whatever you type into the page. A free stretch is `$0` with an end date.
 
+The page does not match the usage percentage on your Claude, ChatGPT, or Cursor account. Those meters include website and phone chats and use each company's own plan accounting. This page prices local CLI transcripts only. It lists newly generated tokens separately from cached context that later turns reread.
+
 ## Phone while the laptop is off
 
 The database already has every row the script uploaded. This repository does not deploy the website anywhere, so the chart page runs where you start Vite. To open that same page from a phone while the laptop is off, build it and host the `dist` folder:
