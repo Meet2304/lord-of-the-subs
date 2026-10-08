@@ -34,34 +34,50 @@ function readState(file) {
   }
 }
 
+function errorText(error) {
+  const cause = error?.cause;
+  return [error?.message, error?.details, cause?.code, cause?.message].filter(Boolean).join(" — ");
+}
+
+function isTransient(error) {
+  const text = errorText(error).toLowerCase();
+  return (
+    text.includes("fetch failed") ||
+    text.includes("network") ||
+    text.includes("econnreset") ||
+    text.includes("timeout") ||
+    text.includes("socket")
+  );
+}
+
 async function upsert(supabase, userId, events) {
   let uploaded = 0;
-  for (let index = 0; index < events.length; index += 200) {
-    const chunk = events.slice(index, index + 200).map((event) => ({
+  for (let index = 0; index < events.length; index += 50) {
+    const chunk = events.slice(index, index + 50).map((event) => ({
       ...event,
       user_id: userId,
     }));
-    const { error } = await supabase
-      .from("usage_events")
-      .upsert(chunk, { onConflict: "user_id,external_id" });
-    if (error) throw new Error(error.message);
+    for (let attempt = 1; ; attempt += 1) {
+      const { error } = await supabase
+        .from("usage_events")
+        .upsert(chunk, { onConflict: "user_id,external_id" });
+      if (!error) break;
+      if (!isTransient(error) || attempt >= 5) throw new Error(errorText(error));
+      const waitMs = 1000 * attempt;
+      console.error(`Upload stalled (${errorText(error)}). Retrying in ${waitMs / 1000}s.`);
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
     uploaded += chunk.length;
   }
   return uploaded;
 }
 
-async function changedFiles(files, state) {
-  /** @type {string[]} */
-  const changed = [];
-  for (const file of files) {
-    const stat = await fs.promises.stat(file);
-    const previous = state.files[file];
-    if (!previous || previous.size !== stat.size || previous.mtimeMs !== stat.mtimeMs) {
-      changed.push(file);
-      state.files[file] = { size: stat.size, mtimeMs: stat.mtimeMs };
-    }
-  }
-  return changed;
+async function fileChanged(file, state) {
+  const stat = await fs.promises.stat(file);
+  const previous = state.files[file];
+  return !previous || previous.size !== stat.size || previous.mtimeMs !== stat.mtimeMs
+    ? stat
+    : null;
 }
 
 const envPath = path.resolve("sync/.env");
@@ -124,13 +140,21 @@ async function scan() {
     await walkJsonl(codexRoot, codexFiles);
 
     let uploaded = 0;
-    for (const file of await changedFiles(claudeFiles, state)) {
-      const text = await fs.promises.readFile(file, "utf8");
-      uploaded += await upsert(supabase, auth.user.id, parseClaudeJsonl(text, file));
-    }
-    for (const file of await changedFiles(codexFiles, state)) {
-      const text = await fs.promises.readFile(file, "utf8");
-      uploaded += await upsert(supabase, auth.user.id, parseCodexJsonl(text, file));
+    const sources = [
+      [claudeFiles, parseClaudeJsonl],
+      [codexFiles, parseCodexJsonl],
+    ];
+    for (const [files, parse] of sources) {
+      for (const file of files) {
+        const stat = await fileChanged(file, state);
+        if (!stat) continue;
+        const text = await fs.promises.readFile(file, "utf8");
+        const count = await upsert(supabase, auth.user.id, parse(text, file));
+        uploaded += count;
+        state.files[file] = { size: stat.size, mtimeMs: stat.mtimeMs };
+        fs.writeFileSync(statePath, JSON.stringify(state));
+        if (count > 0) console.log(`${path.basename(file)}: ${count} rows`);
+      }
     }
 
     if (fs.existsSync(cursorSpool)) {
@@ -164,7 +188,13 @@ console.log(`Signed in as ${auth.user.email}`);
 console.log(`Claude transcripts: ${claudeRoot}`);
 console.log(`Codex transcripts: ${codexRoot}`);
 console.log(`Cursor hook spool: ${cursorSpool}`);
-await scan();
+try {
+  await scan();
+} catch (error) {
+  console.error(error instanceof Error ? error.message : error);
+  if (once) process.exit(1);
+  console.error("The rows that were saved stay saved. The rest will be tried again.");
+}
 
 if (once) {
   console.log("Single pass finished.");
