@@ -22,6 +22,8 @@ cp sync/.env.example sync/.env
 npm run dev
 ```
 
+`npm install` has to finish before `npm run dev`. On Windows, a folder name with a space (such as `Projects_Ad Astra`) keeps npm from finding the `vite` command. The scripts call `node ./node_modules/vite/bin/vite.js` directly so that path still works. If this copy of the repo still has the old `"dev": "vite"` script, run `node .\node_modules\vite\bin\vite.js` after `npm install`.
+
 Open the printed local URL. Create an account. Use a password you can keep in `sync/.env`.
 
 If signup asks you to confirm an email and nothing arrives, open the project’s Auth settings and turn off **Confirm email**, then create the account again:
