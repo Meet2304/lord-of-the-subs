@@ -9,7 +9,7 @@
     "sync": "node sync/index.mjs",
     "sync:once": "node sync/index.mjs --once",
     "install:cursor-hook": "node sync/install-cursor-hook.mjs",
-    "test": "node --test sync/parse.test.mjs"
+    "test": "node --test sync/*.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.81.1"
