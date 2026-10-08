@@ -5,17 +5,26 @@
   import { localDateString, subscriptionCostUsd } from "../shared/subscriptions.mjs";
   import { supabase } from "./lib/supabase";
 
-  type UsageRow = {
-    provider: "anthropic" | "openai" | "cursor";
-    surface: string;
+  type Provider = "anthropic" | "openai" | "cursor";
+
+  type SummaryRow = {
+    provider: Provider;
+    model: string;
+    events: number;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_tokens: number;
+    cache_write_tokens: number;
+  };
+
+  type RecentRow = {
+    provider: Provider;
     model: string;
     occurred_at: string;
     input_tokens: number;
     output_tokens: number;
     cache_read_tokens: number;
     cache_write_tokens: number;
-    confidence: "exact" | "partial";
-    created_at: string;
   };
 
   type Subscription = {
@@ -28,7 +37,13 @@
     ends_on: string | null;
   };
 
-  const providerName: Record<UsageRow["provider"], string> = {
+  const providerName: Record<Provider, string> = {
+    anthropic: "Claude Code",
+    openai: "Codex",
+    cursor: "Cursor",
+  };
+
+  const planName: Record<Provider, string> = {
     anthropic: "Claude",
     openai: "ChatGPT",
     cursor: "Cursor",
@@ -44,7 +59,8 @@
   let busy = $state(false);
 
   let days = $state(30);
-  let rows = $state<UsageRow[]>([]);
+  let summaryRows = $state<SummaryRow[]>([]);
+  let recent = $state<RecentRow[]>([]);
   let subscriptions = $state<Subscription[]>([]);
   let loadError = $state("");
   let latestUpload = $state<string | null>(null);
@@ -84,16 +100,8 @@
 
   async function load() {
     const bounds = windowBounds(days);
-    const [usage, plans, newest] = await Promise.all([
-      supabase
-        .from("usage_events")
-        .select(
-          "provider,surface,model,occurred_at,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,confidence,created_at",
-        )
-        .gte("occurred_at", bounds.startIso)
-        .lt("occurred_at", bounds.endIso)
-        .order("occurred_at", { ascending: false })
-        .limit(5000),
+    const [usage, plans, newest, latestRows] = await Promise.all([
+      supabase.rpc("usage_summary", { start_at: bounds.startIso, end_at: bounds.endIso }),
       supabase
         .from("subscriptions")
         .select("id,provider,label,amount_cents,cadence,starts_on,ends_on")
@@ -103,13 +111,22 @@
         .select("created_at")
         .order("created_at", { ascending: false })
         .limit(1),
+      supabase
+        .from("usage_events")
+        .select("provider,model,occurred_at,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens")
+        .gte("occurred_at", bounds.startIso)
+        .lt("occurred_at", bounds.endIso)
+        .order("occurred_at", { ascending: false })
+        .limit(8),
     ]);
     if (usage.error) throw new Error(usage.error.message);
     if (plans.error) throw new Error(plans.error.message);
     if (newest.error) throw new Error(newest.error.message);
-    rows = (usage.data ?? []) as UsageRow[];
+    if (latestRows.error) throw new Error(latestRows.error.message);
+    summaryRows = (usage.data ?? []) as SummaryRow[];
     subscriptions = (plans.data ?? []) as Subscription[];
     latestUpload = newest.data?.[0]?.created_at ?? null;
+    recent = (latestRows.data ?? []) as RecentRow[];
   }
 
   async function refresh() {
@@ -122,18 +139,18 @@
   }
 
   onMount(() => {
-    let timer = 0;
     const { data } = supabase.auth.onAuthStateChange((_event, next) => {
       session = next;
       ready = true;
       if (next) void refresh();
     });
-    timer = window.setInterval(() => {
-      if (session) void refresh();
-    }, 30_000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && session) void refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       data.subscription.unsubscribe();
-      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   });
 
@@ -162,7 +179,8 @@
 
   async function signOut() {
     await supabase.auth.signOut();
-    rows = [];
+    summaryRows = [];
+    recent = [];
     subscriptions = [];
   }
 
@@ -210,58 +228,59 @@
 
   const bounds = $derived(windowBounds(days));
   const summary = $derived.by(() => {
-    const byProvider = new Map<string, { tokens: number; usd: number; unpriced: number }>();
-    const byModel = new Map<string, { provider: string; tokens: number; usd: number; unpriced: boolean }>();
+    const byProvider = new Map<string, { fresh: number; cache: number; usd: number; unpriced: number }>();
+    const byModel = new Map<string, { provider: string; fresh: number; cache: number; usd: number; unpriced: boolean }>();
     let apiUsd = 0;
     let unpricedTokens = 0;
-    let totalTokens = 0;
-    for (const row of rows) {
-      const count =
-        row.input_tokens +
-        row.output_tokens +
-        row.cache_read_tokens +
-        row.cache_write_tokens;
-      totalTokens += count;
+    let freshTokens = 0;
+    let cacheTokens = 0;
+    for (const row of summaryRows) {
+      const fresh = Number(row.input_tokens) + Number(row.output_tokens);
+      const cache = Number(row.cache_read_tokens) + Number(row.cache_write_tokens);
+      freshTokens += fresh;
+      cacheTokens += cache;
       const cost = eventCostUsd(row);
-      const provider = byProvider.get(row.provider) ?? { tokens: 0, usd: 0, unpriced: 0 };
-      provider.tokens += count;
-      if (cost == null) {
-        provider.unpriced += count;
-        unpricedTokens += count;
-      } else {
+      const provider = byProvider.get(row.provider) ?? { fresh: 0, cache: 0, usd: 0, unpriced: 0 };
+      provider.fresh += fresh;
+      provider.cache += cache;
+      if (cost == null) unpricedTokens += fresh + cache;
+      else {
         provider.usd += cost;
         apiUsd += cost;
       }
+      provider.unpriced += cost == null ? fresh + cache : 0;
       byProvider.set(row.provider, provider);
 
-      const modelKey = `${row.provider}:${row.model}`;
-      const model = byModel.get(modelKey) ?? {
+      const model = byModel.get(`${row.provider}:${row.model}`) ?? {
         provider: row.provider,
-        tokens: 0,
+        fresh: 0,
+        cache: 0,
         usd: 0,
         unpriced: cost == null,
       };
-      model.tokens += count;
+      model.fresh += fresh;
+      model.cache += cache;
       if (cost != null) model.usd += cost;
-      byModel.set(modelKey, model);
+      byModel.set(`${row.provider}:${row.model}`, model);
     }
     const paid = subscriptionCostUsd(subscriptions, bounds.startDate, bounds.endDate);
     return {
       apiUsd,
       paid,
       unpricedTokens,
-      totalTokens,
-      providers: [...byProvider.entries()].sort((a, b) => b[1].tokens - a[1].tokens),
+      freshTokens,
+      cacheTokens,
+      providers: [...byProvider.entries()].sort((a, b) => b[1].fresh + b[1].cache - (a[1].fresh + a[1].cache)),
       models: [...byModel.entries()]
         .map(([key, value]) => ({ model: key.slice(key.indexOf(":") + 1), ...value }))
-        .sort((a, b) => b.tokens - a.tokens),
+        .sort((a, b) => b.fresh + b.cache - (a.fresh + a.cache)),
     };
   });
 </script>
 
 <main>
   <h1>Lord of the Subs</h1>
-  <p class="muted">Token use from your own machines, priced at public API rates, next to what the subscriptions cost.</p>
+  <p class="muted">Local Claude Code and Codex transcripts from this computer, priced at public API rates. This is not the percentage on your Claude, ChatGPT, or Cursor account page.</p>
 
   {#if !ready}
     <p>Loading…</p>
@@ -297,7 +316,7 @@
       <article class="card">
         <div class="muted">API-equivalent</div>
         <p class="figure">{usd.format(summary.apiUsd)}</p>
-        <div class="muted">{tokens.format(summary.totalTokens)} tokens in this window</div>
+        <div class="muted">{tokens.format(summary.freshTokens)} new tokens. {tokens.format(summary.cacheTokens)} were cached context reread on later turns.</div>
       </article>
       <article class="card">
         <div class="muted">Subscriptions in this window</div>
@@ -330,18 +349,22 @@
       {:else}
         <table>
           <thead>
-            <tr><th>Provider</th><th>Tokens</th><th>API $</th></tr>
+            <tr><th>Source</th><th>New</th><th>Cached</th><th>API $</th></tr>
           </thead>
           <tbody>
             {#each summary.providers as [provider, value]}
               <tr>
-                <td>{providerName[provider as UsageRow["provider"]] ?? provider}</td>
-                <td>{tokens.format(value.tokens)}</td>
+                <td>{providerName[provider as Provider] ?? provider}</td>
+                <td>{tokens.format(value.fresh)}</td>
+                <td>{tokens.format(value.cache)}</td>
                 <td>{usd.format(value.usd)}{#if value.unpriced > 0} <span class="muted">partial</span>{/if}</td>
               </tr>
             {/each}
           </tbody>
         </table>
+      {/if}
+      {#if !summary.providers.some(([provider]) => provider === "cursor")}
+        <p class="muted">Cursor account usage is not here. Run npm run install:cursor-hook, restart Cursor, and leave npm run sync running.</p>
       {/if}
     </section>
 
@@ -352,13 +375,14 @@
       {:else}
         <table>
           <thead>
-            <tr><th>Model</th><th>Tokens</th><th>API $</th></tr>
+            <tr><th>Model</th><th>New</th><th>Cached</th><th>API $</th></tr>
           </thead>
           <tbody>
             {#each summary.models as model}
               <tr>
-                <td>{model.model}<div class="muted">{providerName[model.provider as UsageRow["provider"]] ?? model.provider}</div></td>
-                <td>{tokens.format(model.tokens)}</td>
+                <td>{model.model}<div class="muted">{providerName[model.provider as Provider] ?? model.provider}</div></td>
+                <td>{tokens.format(model.fresh)}</td>
+                <td>{tokens.format(model.cache)}</td>
                 <td>{model.unpriced ? "—" : usd.format(model.usd)}</td>
               </tr>
             {/each}
@@ -369,18 +393,18 @@
 
     <section class="card" style="margin-top: 0.75rem">
       <h2>Latest</h2>
-      {#if rows.length === 0}
-        <p class="muted">Claude Code and Codex show up after the sync script runs. Cursor shows up after the hook is installed and you send an agent turn.</p>
+      {#if recent.length === 0}
+        <p class="muted">Claude Code and Codex show up after the sync script runs. Cursor shows up after you run npm run install:cursor-hook and restart Cursor. Chats on the Claude and ChatGPT websites are not in this list.</p>
       {:else}
         <table>
           <tbody>
-            {#each rows.slice(0, 12) as row}
+            {#each recent as row}
               <tr>
                 <td>
                   {when.format(new Date(row.occurred_at))}
                   <div class="muted">{providerName[row.provider]} · {row.model}</div>
                 </td>
-                <td>{tokens.format(row.input_tokens + row.output_tokens + row.cache_read_tokens + row.cache_write_tokens)}</td>
+                <td>{tokens.format(row.output_tokens)} out</td>
               </tr>
             {/each}
           </tbody>
@@ -399,7 +423,7 @@
                 <td>
                   {plan.label}
                   <div class="muted">
-                    {providerName[plan.provider]} · {usd.format(plan.amount_cents / 100)} / {plan.cadence === "annual" ? "year" : "month"}
+                    {planName[plan.provider]} · {usd.format(plan.amount_cents / 100)} / {plan.cadence === "annual" ? "year" : "month"}
                     · from {plan.starts_on}{plan.ends_on ? ` to ${plan.ends_on}` : ""}
                   </div>
                 </td>
